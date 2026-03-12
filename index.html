@@ -62,7 +62,7 @@
         const LoadingOverlay = () => (
             <div className="fixed inset-0 bg-black/80 flex flex-col items-center justify-center z-[300] animate-[fadeIn_0.2s_ease-out]">
                 <i className="fa-solid fa-circle-notch fa-spin text-emerald-500 mb-4 text-5xl"></i>
-                <p className="font-bold text-lg text-white">Sincronizando Banco...</p>
+                <p className="font-bold text-lg text-white">Processando...</p>
             </div>
         );
 
@@ -106,7 +106,7 @@
             const [isLoginMode, setIsLoginMode] = useState(true);
             const [activeSection, setActiveSection] = useState('dashboard');
             const [loading, setLoading] = useState(false);
-            const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false); // Menu Mobile
+            const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
             
             // Data
             const [transactions, setTransactions] = useState([]);
@@ -123,16 +123,19 @@
             const [authForm, setAuthForm] = useState({ nome: '', email: '', senha: '' });
             const [transForm, setTransForm] = useState({ tipo: 'entrada', data: getTodayStr(), desc: '', valor: '' });
             const [contaForm, setContaForm] = useState({ desc: '', valor: '', vencimento: getTodayStr() });
-            const [funcForm, setFuncForm] = useState({ nome: '', cargo: '', salario: '' });
+            const [funcForm, setFuncForm] = useState({ nome: '', cargo: '', salario: '', data_nascimento: '', cpf: '', endereco: '', telefone: '', dados_bancarios: '' });
             const [freqForm, setFreqForm] = useState({ funcionario_id: '', data: getTodayStr(), presente: false });
             const [pagInicio, setPagInicio] = useState(getMonday(new Date()).toISOString().split('T')[0]);
             const [relatorioForm, setRelatorioForm] = useState({ inicio: '', fim: '' });
             const [pagamentosTemp, setPagamentosTemp] = useState([]);
+            
+            // State para o Painel de Admin
+            const [systemUsers, setSystemUsers] = useState([]);
 
             const showAlert = (msg) => setAlertConfig({ show: true, msg });
             const showConfirm = (msg, onConfirm) => setConfirmConfig({ show: true, msg, onConfirm });
 
-            // Tratar navegação no mobile (fecha menu ao clicar)
+            // Tratar navegação no mobile
             const handleNavigate = (sectionId) => {
                 setActiveSection(sectionId);
                 setIsMobileMenuOpen(false);
@@ -166,6 +169,32 @@
                 if (user) loadData();
             }, [user]);
 
+            useEffect(() => {
+                if (activeSection === 'usuarios' && user?.is_admin) {
+                    loadSystemUsers();
+                }
+            }, [activeSection]);
+
+            const loadSystemUsers = async () => {
+                setLoading(true);
+                const { data, error } = await supabase.from('usuarios').select('*').order('nome');
+                if (!error && data) setSystemUsers(data);
+                setLoading(false);
+            };
+
+            const toggleUserApproval = async (id, currentStatus) => {
+                setLoading(true);
+                const { error } = await supabase.from('usuarios').update({ aprovado: !currentStatus }).eq('id', id);
+                setLoading(false);
+                
+                if (error) {
+                    showAlert('Erro ao atualizar status: ' + error.message);
+                } else {
+                    setSystemUsers(systemUsers.map(u => u.id === id ? { ...u, aprovado: !currentStatus } : u));
+                    showAlert(`Acesso ${!currentStatus ? 'liberado' : 'bloqueado'} com sucesso!`);
+                }
+            };
+
             // ================== AUTH ==================
             const handleAuth = async (e) => {
                 e.preventDefault();
@@ -175,17 +204,22 @@
                 if (isLoginMode) {
                     const { data, error } = await supabase.from('usuarios').select('*').eq('email', email).eq('senha', senha).single();
                     if (data) {
-                        setUser(data);
+                        if (data.aprovado === false) {
+                            showAlert('Sua conta está em análise. Aguarde a aprovação do administrador para acessar o sistema.');
+                        } else {
+                            setUser(data);
+                        }
                     } else {
                         showAlert('Email ou senha incorretos.');
                     }
                 } else {
-                    const { data, error } = await supabase.from('usuarios').insert([{ nome, email, senha }]).select().single();
+                    const { data, error } = await supabase.from('usuarios').insert([{ nome, email, senha, aprovado: false }]).select().single();
                     if (error) {
                         showAlert('Erro ao criar conta. Email já em uso.');
                     } else {
-                        showAlert('Conta criada com sucesso!');
-                        setUser(data);
+                        showAlert('Conta criada com sucesso! Como medida de segurança, aguarde a aprovação do administrador para realizar o login.');
+                        setIsLoginMode(true);
+                        setAuthForm({...authForm, senha: ''});
                     }
                 }
                 setLoading(false);
@@ -323,7 +357,14 @@
                 
                 setLoading(true);
                 const { data, error } = await supabase.from('funcionarios').insert([{ 
-                    nome: funcForm.nome, cargo: funcForm.cargo || 'Funcionário', salario_diario: val 
+                    nome: funcForm.nome, 
+                    cargo: funcForm.cargo || 'Funcionário', 
+                    salario_diario: val,
+                    data_nascimento: funcForm.data_nascimento || null,
+                    cpf: funcForm.cpf || null,
+                    endereco: funcForm.endereco || null,
+                    telefone: funcForm.telefone || null,
+                    dados_bancarios: funcForm.dados_bancarios || null
                 }]).select();
                 
                 setLoading(false);
@@ -331,7 +372,7 @@
                 else {
                     setEmployees([...employees, data[0]].sort((a,b) => a.nome.localeCompare(b.nome)));
                     setModalType(null);
-                    setFuncForm({ nome: '', cargo: '', salario: '' });
+                    setFuncForm({ nome: '', cargo: '', salario: '', data_nascimento: '', cpf: '', endereco: '', telefone: '', dados_bancarios: '' });
                 }
             };
 
@@ -529,6 +570,17 @@
                                     <span className="font-semibold md:font-medium">{item.label}</span>
                                 </button>
                             ))}
+
+                            {/* Menu Exclusivo para Administradores */}
+                            {user?.is_admin && (
+                                <button 
+                                    onClick={() => handleNavigate('usuarios')} 
+                                    className={`w-full flex items-center gap-4 px-4 py-4 md:py-3 rounded-2xl transition-all mt-4 border border-emerald-500/30 ${activeSection === 'usuarios' ? 'bg-emerald-500/20 text-emerald-400 shadow-md' : 'hover:bg-zinc-800/50 text-zinc-300'}`}
+                                >
+                                    <i className="fa-solid fa-shield-halved w-5 text-center text-lg md:text-base text-emerald-500"></i>
+                                    <span className="font-semibold md:font-medium">Gerenciar Acessos</span>
+                                </button>
+                            )}
                         </nav>
 
                         <div className="p-6 border-t border-zinc-800 text-xs text-zinc-500">
@@ -552,7 +604,6 @@
                                     </button>
                                 </div>
                                 
-                                {/* Cards Grid Mobile: 2 cols, Desktop: 4 cols */}
                                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-6 mb-8">
                                     <div className="bg-zinc-900 rounded-3xl p-4 md:p-6 border border-zinc-800/50 shadow-lg">
                                         <p className="text-zinc-400 text-xs md:text-sm font-medium mb-1 md:mb-2">Saldo Atual</p>
@@ -575,7 +626,6 @@
                                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                                     <div className="bg-zinc-900 rounded-3xl p-4 md:p-6 border border-zinc-800/50 shadow-lg flex flex-col h-72 md:h-80">
                                         <h3 className="font-semibold mb-4 text-sm md:text-base">Fluxo (30 dias)</h3>
-                                        {/* Wrapper para scroll horizontal em celular */}
                                         <div className="flex-1 overflow-x-auto pb-2 -mx-2 px-2">
                                             <div className="flex items-end gap-1 min-w-[500px] h-full">
                                                 {chartData.data.map((d, i) => (
@@ -623,7 +673,7 @@
                             </div>
                         )}
 
-                        {/* FLUXO DE CAIXA (CARDS RESPONSIVOS) */}
+                        {/* FLUXO DE CAIXA */}
                         {activeSection === 'fluxo' && (
                             <div className="animate-[fadeIn_0.5s_ease-out] max-w-7xl mx-auto">
                                 <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6 md:mb-8">
@@ -663,7 +713,7 @@
                             </div>
                         )}
 
-                        {/* CONTAS A PAGAR (CARDS RESPONSIVOS) */}
+                        {/* CONTAS A PAGAR */}
                         {activeSection === 'contas' && (
                             <div className="animate-[fadeIn_0.5s_ease-out] max-w-7xl mx-auto">
                                 <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6 md:mb-8">
@@ -707,7 +757,7 @@
                             </div>
                         )}
 
-                        {/* FUNCIONÁRIOS (CARDS RESPONSIVOS) */}
+                        {/* FUNCIONÁRIOS */}
                         {activeSection === 'funcionarios' && (
                             <div className="animate-[fadeIn_0.5s_ease-out] max-w-7xl mx-auto">
                                 <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6 md:mb-8">
@@ -722,18 +772,21 @@
                                             <div className="p-8 text-center text-zinc-500 font-medium">Nenhum funcionário cadastrado.</div>
                                         )}
                                         {employees.map(emp => (
-                                            <div key={emp.id} className="p-4 md:p-6 hover:bg-zinc-800/30 transition flex items-center justify-between gap-4">
+                                            <div key={emp.id} className="p-4 md:p-6 hover:bg-zinc-800/30 transition flex flex-col md:flex-row md:items-center justify-between gap-4">
                                                 <div className="flex flex-col flex-1">
                                                     <span className="font-bold text-base md:text-lg text-zinc-200 truncate">{emp.nome}</span>
-                                                    <span className="text-xs md:text-sm text-zinc-400 mt-1 truncate">{emp.cargo}</span>
+                                                    <span className="text-xs md:text-sm text-zinc-400 mt-1 truncate">{emp.cargo} {emp.cpf ? `• CPF: ${emp.cpf}` : ''}</span>
+                                                    {emp.telefone && <span className="text-xs md:text-sm text-zinc-500 mt-0.5"><i className="fa-solid fa-phone text-[10px] mr-1"></i> {emp.telefone}</span>}
                                                 </div>
-                                                <div className="flex flex-col items-end">
-                                                    <span className="font-bold text-base md:text-lg text-emerald-400">{formatCurrency(emp.salario_diario)}</span>
-                                                    <span className="text-[10px] md:text-xs text-zinc-500 mt-0.5">por dia</span>
+                                                <div className="flex items-center justify-between md:justify-end gap-4 pt-3 md:pt-0 border-t border-zinc-800/50 md:border-0 w-full md:w-auto">
+                                                    <div className="flex flex-col md:items-end">
+                                                        <span className="font-bold text-base md:text-lg text-emerald-400">{formatCurrency(emp.salario_diario)}</span>
+                                                        <span className="text-[10px] md:text-xs text-zinc-500 mt-0.5">por dia</span>
+                                                    </div>
+                                                    <button onClick={() => deleteFuncionario(emp.id)} className="w-10 h-10 md:w-auto md:h-auto flex items-center justify-center shrink-0 text-zinc-500 hover:text-red-400 transition rounded-full hover:bg-zinc-800 ml-2 md:ml-6">
+                                                        <i className="fa-solid fa-trash text-lg md:text-base"></i>
+                                                    </button>
                                                 </div>
-                                                <button onClick={() => deleteFuncionario(emp.id)} className="w-10 h-10 md:w-auto md:h-auto flex items-center justify-center shrink-0 text-zinc-500 hover:text-red-400 transition rounded-full hover:bg-zinc-800 ml-2 md:ml-6">
-                                                    <i className="fa-solid fa-trash text-lg md:text-base"></i>
-                                                </button>
                                             </div>
                                         ))}
                                     </div>
@@ -861,7 +914,6 @@
                                     </div>
                                 </div>
 
-                                {/* Slider horizontal no celular para os cards de resumo */}
                                 <div className="flex overflow-x-auto gap-4 md:grid md:grid-cols-3 md:gap-6 mb-8 pb-2 snap-x hide-scrollbar">
                                     <div className="bg-zinc-900 rounded-3xl p-6 border border-emerald-500/20 shadow-lg relative overflow-hidden min-w-[240px] md:min-w-0 snap-center shrink-0">
                                         <div className="absolute top-0 right-0 p-6 opacity-5"><i className="fa-solid fa-arrow-trend-up text-6xl"></i></div>
@@ -899,6 +951,56 @@
                                                     <span className={`font-bold text-base md:text-lg ${t.tipo==='entrada'?'text-emerald-400':'text-red-400'}`}>
                                                         {t.tipo==='entrada' ? '+' : '-'} {formatCurrency(t.valor)}
                                                     </span>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* GERENCIAMENTO DE ACESSOS (ADMIN) */}
+                        {activeSection === 'usuarios' && user?.is_admin && (
+                            <div className="animate-[fadeIn_0.5s_ease-out] max-w-7xl mx-auto">
+                                <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6 md:mb-8">
+                                    <div>
+                                        <h2 className="text-2xl md:text-3xl font-bold">Gerenciar Acessos</h2>
+                                        <p className="text-zinc-400 text-sm mt-1">Aprove ou bloqueie usuários que tentam acessar o sistema.</p>
+                                    </div>
+                                    <button onClick={loadSystemUsers} className="w-12 h-12 flex items-center justify-center bg-zinc-800 hover:bg-zinc-700 rounded-xl transition text-emerald-400 shadow-md">
+                                        <i className="fa-solid fa-rotate-right"></i>
+                                    </button>
+                                </div>
+                                
+                                <div className="bg-zinc-900 rounded-3xl overflow-hidden border border-zinc-800/50 shadow-xl">
+                                    <div className="divide-y divide-zinc-800/50">
+                                        {systemUsers.length === 0 && (
+                                            <div className="p-8 text-center text-zinc-500 font-medium">Carregando usuários...</div>
+                                        )}
+                                        {systemUsers.map(u => (
+                                            <div key={u.id} className="p-4 md:p-6 hover:bg-zinc-800/30 transition flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                                <div className="flex flex-col flex-1">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="font-bold text-base md:text-lg text-zinc-200">{u.nome}</span>
+                                                        {u.is_admin && <span className="bg-emerald-500/20 text-emerald-400 text-[10px] px-2 py-0.5 rounded-md font-bold border border-emerald-500/30">ADMIN</span>}
+                                                    </div>
+                                                    <span className="text-xs md:text-sm text-zinc-400 mt-1"><i className="fa-regular fa-envelope mr-1"></i> {u.email}</span>
+                                                </div>
+                                                
+                                                <div className="flex items-center justify-between md:justify-end gap-4 w-full md:w-auto pt-3 md:pt-0 border-t border-zinc-800/50 md:border-0">
+                                                    <span className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 ${u.aprovado ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                                                        {u.aprovado ? <><i className="fa-solid fa-check"></i> Liberado</> : <><i className="fa-solid fa-lock"></i> Bloqueado</>}
+                                                    </span>
+                                                    
+                                                    {/* Não permite que o admin bloqueie a si mesmo para evitar trancar o sistema acidentalmente */}
+                                                    {user.id !== u.id && (
+                                                        <button 
+                                                            onClick={() => toggleUserApproval(u.id, u.aprovado)} 
+                                                            className={`px-5 py-2 md:py-2.5 rounded-xl text-xs md:text-sm font-bold transition border ${u.aprovado ? 'bg-zinc-800 text-red-400 hover:bg-red-500/20 hover:border-red-500/30 border-transparent' : 'bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600 hover:text-white border-emerald-500/30'}`}
+                                                        >
+                                                            {u.aprovado ? 'Revogar Acesso' : 'Aprovar Acesso'}
+                                                        </button>
+                                                    )}
                                                 </div>
                                             </div>
                                         ))}
@@ -984,23 +1086,49 @@
                                     <h3 className="text-xl font-bold">Novo Funcionário</h3>
                                     <button onClick={() => setModalType(null)} className="md:hidden text-zinc-400"><i className="fa-solid fa-xmark text-xl"></i></button>
                                 </div>
-                                <div className="space-y-5">
+                                <div className="space-y-4">
                                     <div>
-                                        <label className="block text-xs md:text-sm text-zinc-400 mb-2 font-medium">Nome Completo</label>
-                                        <input type="text" value={funcForm.nome} onChange={e => setFuncForm({...funcForm, nome: e.target.value})} className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl p-4 outline-none focus:border-emerald-500 transition text-base" />
+                                        <label className="block text-xs md:text-sm text-zinc-400 mb-1 font-medium">Nome Completo *</label>
+                                        <input type="text" value={funcForm.nome} onChange={e => setFuncForm({...funcForm, nome: e.target.value})} className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl p-3 outline-none focus:border-emerald-500 transition text-sm md:text-base" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs md:text-sm text-zinc-400 mb-1 font-medium">CPF</label>
+                                            <input type="text" value={funcForm.cpf} onChange={e => setFuncForm({...funcForm, cpf: e.target.value})} className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl p-3 outline-none focus:border-emerald-500 transition text-sm md:text-base" placeholder="000.000.000-00" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs md:text-sm text-zinc-400 mb-1 font-medium">Nascimento</label>
+                                            <input type="date" value={funcForm.data_nascimento} onChange={e => setFuncForm({...funcForm, data_nascimento: e.target.value})} className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl p-3 outline-none focus:border-emerald-500 transition text-sm md:text-base" />
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs md:text-sm text-zinc-400 mb-1 font-medium">Telefone</label>
+                                            <input type="text" value={funcForm.telefone} onChange={e => setFuncForm({...funcForm, telefone: e.target.value})} className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl p-3 outline-none focus:border-emerald-500 transition text-sm md:text-base" placeholder="(00) 90000-0000" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs md:text-sm text-zinc-400 mb-1 font-medium">Cargo</label>
+                                            <input type="text" value={funcForm.cargo} onChange={e => setFuncForm({...funcForm, cargo: e.target.value})} className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl p-3 outline-none focus:border-emerald-500 transition text-sm md:text-base" placeholder="Ex: Vendedor" />
+                                        </div>
                                     </div>
                                     <div>
-                                        <label className="block text-xs md:text-sm text-zinc-400 mb-2 font-medium">Cargo</label>
-                                        <input type="text" value={funcForm.cargo} onChange={e => setFuncForm({...funcForm, cargo: e.target.value})} className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl p-4 outline-none focus:border-emerald-500 transition text-base" placeholder="Ex: Vendedor" />
+                                        <label className="block text-xs md:text-sm text-zinc-400 mb-1 font-medium">Endereço Completo</label>
+                                        <input type="text" value={funcForm.endereco} onChange={e => setFuncForm({...funcForm, endereco: e.target.value})} className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl p-3 outline-none focus:border-emerald-500 transition text-sm md:text-base" placeholder="Rua, Número, Bairro, Cidade" />
                                     </div>
-                                    <div>
-                                        <label className="block text-xs md:text-sm text-zinc-400 mb-2 font-medium">Salário Diário (R$)</label>
-                                        <input type="number" step="0.01" value={funcForm.salario} onChange={e => setFuncForm({...funcForm, salario: e.target.value})} className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl p-4 outline-none focus:border-emerald-500 transition text-base" placeholder="0,00" />
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs md:text-sm text-zinc-400 mb-1 font-medium">Chave PIX / Conta</label>
+                                            <input type="text" value={funcForm.dados_bancarios} onChange={e => setFuncForm({...funcForm, dados_bancarios: e.target.value})} className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl p-3 outline-none focus:border-emerald-500 transition text-sm md:text-base" placeholder="CPF, Celular..." />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs md:text-sm text-zinc-400 mb-1 font-medium">Salário Diário (R$) *</label>
+                                            <input type="number" step="0.01" value={funcForm.salario} onChange={e => setFuncForm({...funcForm, salario: e.target.value})} className="w-full bg-zinc-800 border border-zinc-700 rounded-2xl p-3 outline-none focus:border-emerald-500 transition text-sm md:text-base" placeholder="0,00" />
+                                        </div>
                                     </div>
                                 </div>
-                                <div className="flex flex-col md:flex-row gap-3 md:gap-4 mt-8">
+                                <div className="flex flex-col md:flex-row gap-3 md:gap-4 mt-6">
                                     <button onClick={() => setModalType(null)} className="hidden md:block flex-1 py-4 bg-zinc-800 hover:bg-zinc-700 rounded-2xl font-bold transition">Cancelar</button>
-                                    <button onClick={saveFuncionario} className="w-full md:flex-1 py-4 bg-emerald-500 hover:bg-emerald-600 rounded-2xl font-bold shadow-lg shadow-emerald-500/20 transition text-lg md:text-base mb-2 md:mb-0">Salvar</button>
+                                    <button onClick={saveFuncionario} className="w-full md:flex-1 py-4 bg-emerald-500 hover:bg-emerald-600 rounded-2xl font-bold shadow-lg shadow-emerald-500/20 transition text-lg md:text-base mb-2 md:mb-0">Salvar Dados</button>
                                 </div>
                             </div>
                         </div>
@@ -1028,5 +1156,3 @@
     </style>
 </body>
 </html>
-
-
